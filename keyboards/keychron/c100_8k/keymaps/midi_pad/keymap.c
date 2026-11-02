@@ -20,8 +20,8 @@
 //             top-right 84-99), 4 pads per row, rows ascending upward.
 //
 // Octave -/+ shifts Notes mode by 12 semitones and Drum mode by one 16-pad page.
-// Play / Stop / Record / Tap Tempo send CC messages on MIDI channel 16
-// (CC 44, 45, 46, 47) for Live's MIDI map.
+// Play / Stop / Record / Tap Tempo (bottom row, left to right) send CC 44, 45,
+// 46 and 47 on MIDI channel 1, the same channel as the notes.
 // Bright - / + (top-right) change LED brightness in five steps; the level is
 // saved and restored after unplugging. Every pad sends velocity 127.
 
@@ -64,7 +64,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
-        MD_STOP, MD_PLAY, MD_REC, MD_TAP, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX),
+        MD_PLAY, MD_STOP, MD_REC, MD_TAP, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX),
 
     [DRUM_LAYER] = LAYOUT_tkl_ansi(
         MD_OCTAVE_DOWN, MD_OCTAVE_UP, XXXXXXX, MD_NOTES, MD_DRUMS, XXXXXXX, XXXXXXX, XXXXXXX, MD_BRIGHT_DOWN, MD_BRIGHT_UP,
@@ -76,7 +76,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
-        MD_STOP, MD_PLAY, MD_REC, MD_TAP, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX),
+        MD_PLAY, MD_STOP, MD_REC, MD_TAP, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX),
 };
 // clang-format on
 
@@ -94,9 +94,9 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 #define MIDI_PAD_CHANNEL 0 // MIDI channel 1 for notes
 #define PAD_VELOCITY 127
 
-// Transport controls: CC messages on MIDI channel 16 (zero-based 15), so they
-// never collide with note traffic.
-#define TRANSPORT_CHANNEL 15
+// Transport controls: CC messages on MIDI channel 1 (zero-based 0), the same
+// channel as the notes. CC and note messages never collide.
+#define TRANSPORT_CHANNEL 0
 #define TRANSPORT_CC_PLAY 44   // Start
 #define TRANSPORT_CC_STOP 45
 #define TRANSPORT_CC_RECORD 46 // Global record
@@ -517,8 +517,8 @@ static void render_ring(void) {
                 drums ? PRESSED_BRIGHTNESS : RING_DIM_BRIGHTNESS); // Drums
   set_key_color(0, 8, PAD_COLOR_WHITE, RING_DIM_BRIGHTNESS);        // Bright -
   set_key_color(0, 9, PAD_COLOR_WHITE, RING_BRIGHTNESS);            // Bright +
-  set_key_color(PAD_LAST_ROW + 1, 0, PAD_COLOR_WHITE, 100);        // Stop
-  set_key_color(PAD_LAST_ROW + 1, 1, PAD_COLOR_GREEN, RING_BRIGHTNESS); // Play
+  set_key_color(PAD_LAST_ROW + 1, 0, PAD_COLOR_GREEN, RING_BRIGHTNESS); // Play
+  set_key_color(PAD_LAST_ROW + 1, 1, PAD_COLOR_WHITE, 100);        // Stop
   set_key_color(PAD_LAST_ROW + 1, 2, PAD_COLOR_RED, RING_BRIGHTNESS);   // Record
   set_key_color(PAD_LAST_ROW + 1, 3, PAD_COLOR_YELLOW, RING_BRIGHTNESS); // Tap tempo
 }

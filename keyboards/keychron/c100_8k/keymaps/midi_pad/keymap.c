@@ -20,7 +20,10 @@
 //             top-right 84-99), 4 pads per row, rows ascending upward.
 //
 // Octave -/+ shifts Notes mode by 12 semitones and Drum mode by one 16-pad page.
-// Stop / Play / Record send CC messages on MIDI channel 16 for Live's MIDI map.
+// Play / Stop / Record / Tap Tempo send CC messages on MIDI channel 16
+// (CC 44, 45, 46, 47) for Live's MIDI map.
+// Bright - / + (top-right) change LED brightness in five steps; the level is
+// saved and restored after unplugging. Every pad sends velocity 127.
 
 #include QMK_KEYBOARD_H
 
@@ -39,6 +42,9 @@ enum custom_keycodes {
   MD_STOP,
   MD_PLAY,
   MD_REC,
+  MD_TAP,
+  MD_BRIGHT_DOWN,
+  MD_BRIGHT_UP,
 };
 
 #define MD_N MD_PAD
@@ -49,7 +55,7 @@ enum custom_keycodes {
 // clang-format off
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     [NOTES_LAYER] = LAYOUT_tkl_ansi(
-        MD_OCTAVE_DOWN, MD_OCTAVE_UP, XXXXXXX, MD_NOTES, MD_DRUMS, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX,
+        MD_OCTAVE_DOWN, MD_OCTAVE_UP, XXXXXXX, MD_NOTES, MD_DRUMS, XXXXXXX, XXXXXXX, XXXXXXX, MD_BRIGHT_DOWN, MD_BRIGHT_UP,
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
@@ -58,10 +64,10 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
-        MD_STOP, MD_PLAY, MD_REC, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX),
+        MD_STOP, MD_PLAY, MD_REC, MD_TAP, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX),
 
     [DRUM_LAYER] = LAYOUT_tkl_ansi(
-        MD_OCTAVE_DOWN, MD_OCTAVE_UP, XXXXXXX, MD_NOTES, MD_DRUMS, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX,
+        MD_OCTAVE_DOWN, MD_OCTAVE_UP, XXXXXXX, MD_NOTES, MD_DRUMS, XXXXXXX, XXXXXXX, XXXXXXX, MD_BRIGHT_DOWN, MD_BRIGHT_UP,
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
@@ -70,7 +76,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
         XXXXXXX, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, MD_N, XXXXXXX,
-        MD_STOP, MD_PLAY, MD_REC, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX),
+        MD_STOP, MD_PLAY, MD_REC, MD_TAP, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX, XXXXXXX),
 };
 // clang-format on
 
@@ -86,14 +92,18 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 #define NO_ACTIVE_NOTE 0xFF
 #define MIDI_MAX_NOTE 127
 #define MIDI_PAD_CHANNEL 0 // MIDI channel 1 for notes
+#define PAD_VELOCITY 127
 
 // Transport controls: CC messages on MIDI channel 16 (zero-based 15), so they
-// never collide with note traffic. Map them in Live with MIDI Map mode.
+// never collide with note traffic.
 #define TRANSPORT_CHANNEL 15
-#define TRANSPORT_CC_STOP 20
-#define TRANSPORT_CC_PLAY 21
-#define TRANSPORT_CC_RECORD 22
-#define TRANSPORT_SEND_RELEASE false // true also sends value 0 on key release
+#define TRANSPORT_CC_PLAY 44   // Start
+#define TRANSPORT_CC_STOP 45
+#define TRANSPORT_CC_RECORD 46 // Global record
+#define TRANSPORT_CC_TAP 47    // Tap tempo
+// Play / Stop / Record send 127 on press only. Set true to also send 0 on
+// release.
+#define TRANSPORT_SEND_RELEASE false
 
 // The 64 playable pads are the centre 8 x 8 block of the 10 x 10 matrix.
 #define PAD_FIRST_ROW 1
@@ -118,6 +128,22 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 #define RING_BRIGHTNESS 180
 #define RING_DIM_BRIGHTNESS 60
 
+// Global brightness: five steps applied to every LED except the press flash.
+#define BRIGHTNESS_LEVEL_COUNT 5
+#define BRIGHTNESS_LEVEL_DEFAULT 4 // full brightness
+#define PAD_CONFIG_MAGIC 0xB1
+
+static const uint8_t brightness_levels[BRIGHTNESS_LEVEL_COUNT] = {40, 90, 140,
+                                                                   200, 255};
+
+typedef union {
+  uint32_t raw;
+  struct {
+    uint8_t magic;
+    uint8_t brightness_level;
+  } values;
+} pad_config_t;
+
 typedef struct {
   uint8_t red;
   uint8_t green;
@@ -131,6 +157,7 @@ typedef struct {
 #define PAD_COLOR_MAGENTA ((pad_color_t){0xFF, 0x00, 0xEA})
 #define PAD_COLOR_PURPLE ((pad_color_t){0xAE, 0x00, 0xFF})
 #define PAD_COLOR_RED ((pad_color_t){0xFF, 0x00, 0x20})
+#define PAD_COLOR_YELLOW ((pad_color_t){0xFF, 0xD5, 0x00})
 
 // ---------------------------------------------------------------------------
 // State
@@ -140,6 +167,7 @@ static uint8_t active_notes[MATRIX_ROWS][MATRIX_COLS];
 static uint8_t active_note_counts[MIDI_MAX_NOTE + 1];
 static int8_t notes_shift = 0; // octaves
 static int8_t drum_bank = 0;   // 16-pad pages
+static uint8_t brightness_level = BRIGHTNESS_LEVEL_DEFAULT;
 static bool dfu_sysex_matches = false;
 static bool dfu_reboot_requested = false;
 static pad_color_t led_frame[RGB_MATRIX_LED_COUNT];
@@ -181,8 +209,7 @@ static uint8_t note_for_pad(uint8_t row, uint8_t col) {
 
 static void tracked_note_on(uint8_t note) {
   if (active_note_counts[note]++ == 0) {
-    midi_send_noteon(&midi_device, MIDI_PAD_CHANNEL, note,
-                     MIDI_PAD_DEFAULT_VELOCITY);
+    midi_send_noteon(&midi_device, MIDI_PAD_CHANNEL, note, PAD_VELOCITY);
   }
 }
 
@@ -245,10 +272,30 @@ static void shift_range(int8_t direction) {
   }
 }
 
-static void send_transport(uint8_t cc, bool pressed) {
+static void save_brightness(void) {
+  pad_config_t config = {.raw = 0};
+  config.values.magic = PAD_CONFIG_MAGIC;
+  config.values.brightness_level = brightness_level;
+  eeconfig_update_user(config.raw);
+}
+
+void eeconfig_init_user(void) {
+  brightness_level = BRIGHTNESS_LEVEL_DEFAULT;
+  save_brightness();
+}
+
+static void change_brightness(int8_t direction) {
+  const int8_t next = (int8_t)brightness_level + direction;
+  if (next >= 0 && next < BRIGHTNESS_LEVEL_COUNT) {
+    brightness_level = next;
+    save_brightness();
+  }
+}
+
+static void send_cc_button(uint8_t cc, bool pressed, bool send_release) {
   if (pressed) {
     midi_send_cc(&midi_device, TRANSPORT_CHANNEL, cc, 127);
-  } else if (TRANSPORT_SEND_RELEASE) {
+  } else if (send_release) {
     midi_send_cc(&midi_device, TRANSPORT_CHANNEL, cc, 0);
   }
 }
@@ -292,6 +339,13 @@ void matrix_scan_user(void) {
 
 void keyboard_post_init_user(void) {
   rgb_matrix_mode_noeeprom(RGB_MATRIX_CUSTOM_MIDI_PAD_CANVAS);
+  pad_config_t config = {.raw = eeconfig_read_user()};
+  if (config.values.magic == PAD_CONFIG_MAGIC &&
+      config.values.brightness_level < BRIGHTNESS_LEVEL_COUNT) {
+    brightness_level = config.values.brightness_level;
+  } else {
+    eeconfig_init_user(); // also replaces data left by the old firmware
+  }
   for (uint8_t row = 0; row < MATRIX_ROWS; ++row) {
     for (uint8_t col = 0; col < MATRIX_COLS; ++col) {
       active_notes[row][col] = NO_ACTIVE_NOTE;
@@ -337,15 +391,33 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     return false;
 
   case MD_STOP:
-    send_transport(TRANSPORT_CC_STOP, pressed);
+    send_cc_button(TRANSPORT_CC_STOP, pressed, TRANSPORT_SEND_RELEASE);
     return false;
 
   case MD_PLAY:
-    send_transport(TRANSPORT_CC_PLAY, pressed);
+    send_cc_button(TRANSPORT_CC_PLAY, pressed, TRANSPORT_SEND_RELEASE);
     return false;
 
   case MD_REC:
-    send_transport(TRANSPORT_CC_RECORD, pressed);
+    send_cc_button(TRANSPORT_CC_RECORD, pressed, TRANSPORT_SEND_RELEASE);
+    return false;
+
+  case MD_BRIGHT_DOWN:
+    if (pressed) {
+      change_brightness(-1);
+    }
+    return false;
+
+  case MD_BRIGHT_UP:
+    if (pressed) {
+      change_brightness(1);
+    }
+    return false;
+
+  case MD_TAP:
+    // Tap tempo is a momentary tap: 127 on press, 0 on release, so the
+    // controller never stays held on.
+    send_cc_button(TRANSPORT_CC_TAP, pressed, true);
     return false;
   }
 
@@ -364,8 +436,10 @@ static uint8_t scale_component(uint8_t component, uint8_t brightness) {
   return ((uint16_t)component * brightness) / 255;
 }
 
-static void set_key_color(uint8_t row, uint8_t col, pad_color_t color,
-                          uint8_t brightness) {
+// Writes a colour without the global brightness setting; used for press flashes
+// so they stay visible at the lowest level.
+static void set_key_color_raw(uint8_t row, uint8_t col, pad_color_t color,
+                              uint8_t brightness) {
   const uint8_t led = led_index(row, col);
   if (led >= RGB_MATRIX_LED_COUNT) {
     return;
@@ -373,6 +447,13 @@ static void set_key_color(uint8_t row, uint8_t col, pad_color_t color,
   led_frame[led] = (pad_color_t){scale_component(color.red, brightness),
                                  scale_component(color.green, brightness),
                                  scale_component(color.blue, brightness)};
+}
+
+static void set_key_color(uint8_t row, uint8_t col, pad_color_t color,
+                          uint8_t brightness) {
+  set_key_color_raw(row, col, color,
+                    ((uint16_t)brightness * brightness_levels[brightness_level]) /
+                        255);
 }
 
 static bool is_black_key(uint8_t pitch_class) {
@@ -412,7 +493,7 @@ static void render_pads(void) {
         continue; // outside MIDI range: leave dark
       }
       if (active_note_counts[note] > 0) {
-        set_key_color(row, col, PAD_COLOR_WHITE, PRESSED_BRIGHTNESS);
+        set_key_color_raw(row, col, PAD_COLOR_WHITE, PRESSED_BRIGHTNESS);
       } else if (drums) {
         set_key_color(row, col, drum_block_color(row, col), PAD_BRIGHTNESS);
       } else if (note % 12 == 0) {
@@ -434,9 +515,12 @@ static void render_ring(void) {
                 drums ? RING_DIM_BRIGHTNESS : PRESSED_BRIGHTNESS); // Notes
   set_key_color(0, 4, PAD_COLOR_ORANGE,
                 drums ? PRESSED_BRIGHTNESS : RING_DIM_BRIGHTNESS); // Drums
+  set_key_color(0, 8, PAD_COLOR_WHITE, RING_DIM_BRIGHTNESS);        // Bright -
+  set_key_color(0, 9, PAD_COLOR_WHITE, RING_BRIGHTNESS);            // Bright +
   set_key_color(PAD_LAST_ROW + 1, 0, PAD_COLOR_WHITE, 100);        // Stop
   set_key_color(PAD_LAST_ROW + 1, 1, PAD_COLOR_GREEN, RING_BRIGHTNESS); // Play
   set_key_color(PAD_LAST_ROW + 1, 2, PAD_COLOR_RED, RING_BRIGHTNESS);   // Record
+  set_key_color(PAD_LAST_ROW + 1, 3, PAD_COLOR_YELLOW, RING_BRIGHTNESS); // Tap tempo
 }
 
 // Ring keys flash white while held; pads already show their note state.
@@ -447,7 +531,7 @@ static void render_ring_presses(void) {
                           col >= PAD_FIRST_COL &&
                           col < PAD_FIRST_COL + PAD_SIZE;
       if (!is_pad && matrix_is_on(row, col)) {
-        set_key_color(row, col, PAD_COLOR_WHITE, PRESSED_BRIGHTNESS);
+        set_key_color_raw(row, col, PAD_COLOR_WHITE, PRESSED_BRIGHTNESS);
       }
     }
   }
